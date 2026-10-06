@@ -175,55 +175,109 @@ class Layout:
         gap = self.const("RadicalVerticalGap", size)
         extra = self.const("RadicalExtraAscender", size)
 
-        target_units = (rad.height + gap + rule_t) / k
+        target_units = (rad.height + rad.depth + 2 * gap + rule_t) / k
         radical_glyph = self.font.glyph_for("\u221a")
         pieces, covered_units = self.font.stretch_vertical(radical_glyph, target_units)
         covered = covered_units * k
         surd_width = max(self.font.advance(g) for g, _ in pieces) * k
 
-        top = rad.height + gap + rule_t  # top of surd aligns with top of the bar
-        center_y = top - covered / 2.0
+        bar_top = rad.height + gap + rule_t  # top of surd aligns with top of the bar
+        # The radical spans from the bar down past the radicand plus gap.
+        content_bottom = -rad.depth - gap
+        target_center = (bar_top + content_bottom) / 2.0
+        center_y = self._fit_pieces(pieces, k, target_center, bar_top, content_bottom)
         items = []
         for glyph, off_units in pieces:
             items.append(("glyph", glyph, 0.0, center_y + off_units * k, k))
         items += [shift_item(it, surd_width, 0.0) for it in rad.items]
-        bar_top = rad.height + gap + rule_t
         items.append(("rect", surd_width, bar_top, rad.width, rule_t))
 
         height = bar_top + extra
-        depth = max(rad.depth, covered - top)
+        depth = max(rad.depth + gap, -self._pieces_bottom(pieces, k, center_y))
         return Box(width=surd_width + rad.width, height=height, depth=depth,
                    items=items)
+
+    def _pieces_bounds(self, pieces, k, center_y):
+        top = bottom = None
+        for glyph, off_units in pieces:
+            _, by0, _, by1 = self.font.bounds(glyph)
+            cy = center_y + off_units * k
+            b = cy + by0 * k
+            t = cy + by1 * k
+            bottom = b if bottom is None else min(bottom, b)
+            top = t if top is None else max(top, t)
+        return top, bottom
+
+    def _pieces_bottom(self, pieces, k, center_y):
+        return self._pieces_bounds(pieces, k, center_y)[1]
+
+    def _fit_pieces(self, pieces, k, center_y, top_need, bottom_need):
+        """Center a stretchy assembly, nudging so its ink covers both ends."""
+        top, bottom = self._pieces_bounds(pieces, k, center_y)
+        if bottom > bottom_need:
+            center_y -= bottom - bottom_need
+        top, bottom = self._pieces_bounds(pieces, k, center_y)
+        if top < top_need:
+            center_y += top_need - top
+        return center_y
 
     # -- delimiters ---------------------------------------------------------
 
     def _layout_paren(self, node, size, level) -> Box:
         inner = self.layout(node["child"], size, level)
         k = size / self.font.upem
-        axis = self.const("AxisHeight", size)
         target_units = (inner.height + inner.depth) / k
 
         items = []
         x = 0.0
         covered_max = 0.0
+        center_y = (inner.height - inner.depth) / 2.0
+        pieces_by_side = []
         for side in ("left", "right"):
             glyph = DELIMS[node[side]]
             pieces, covered_units = self.font.stretch_vertical(
                 self._delim_base_glyph(glyph), target_units)
             covered_max = max(covered_max, covered_units * k)
             width = max(self.font.advance(g) for g, _ in pieces) * k
-            for g, off_units in pieces:
-                items.append(("glyph", g, x, axis + off_units * k, k))
+            pieces_by_side.append(pieces)
+            x += width
             if side == "left":
-                x += width
                 inner_x = x
                 x += inner.width
-            else:
-                x += width
+        # Clamp so the delimiter ink truly covers the full content extent.
+        center_y = self._fit_pieces_all(pieces_by_side, k, center_y,
+                                        inner.height, -inner.depth)
+        x = 0.0
+        side_index = 0
+        for side in ("left", "right"):
+            glyph = DELIMS[node[side]]
+            width = max(self.font.advance(g) for g, _ in pieces_by_side[side_index]) * k
+            for g, off_units in pieces_by_side[side_index]:
+                items.append(("glyph", g, x, center_y + off_units * k, k))
+            x += width
+            if side == "left":
+                x += inner.width
+            side_index += 1
         items += [shift_item(it, inner_x, 0.0) for it in inner.items]
-        height = max(inner.height, axis + covered_max / 2.0)
-        depth = max(inner.depth, covered_max / 2.0 - axis)
+        height = max(inner.height, center_y + covered_max / 2.0)
+        depth = max(inner.depth, -(center_y - covered_max / 2.0))
         return Box(width=x, height=height, depth=depth, items=items)
+
+    def _fit_pieces_all(self, sides, k, center_y, top_need, bottom_need):
+        def bounds(cy):
+            top = bottom = None
+            for pieces in sides:
+                t, b = self._pieces_bounds(pieces, k, cy)
+                top = t if top is None else max(top, t)
+                bottom = b if bottom is None else min(bottom, b)
+            return top, bottom
+        top, bottom = bounds(center_y)
+        if bottom > bottom_need:
+            center_y -= bottom - bottom_need
+        top, bottom = bounds(center_y)
+        if top < top_need:
+            center_y += top_need - top
+        return center_y
 
     def _delim_base_glyph(self, glyph_name: str) -> str:
         # DELIMS maps char -> glyph name; verify against the font cmap.

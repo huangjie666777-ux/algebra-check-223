@@ -44,7 +44,7 @@ def _validate(node: Any, depth: int, counter: list[int], has_glyph) -> dict:
     if not isinstance(node, dict):
         raise ValidationError("node must be an object")
     ntype = node.get("type")
-    if ntype not in NODE_TYPES:
+    if not isinstance(ntype, str) or ntype not in NODE_TYPES:
         raise ValidationError(f"unknown node type: {ntype!r}")
 
     def child(key, required=True):
@@ -85,7 +85,7 @@ def _validate(node: Any, depth: int, counter: list[int], has_glyph) -> dict:
         left = node.get("left", "(")
         right = node.get("right", ")")
         for d in (left, right):
-            if d not in DELIMS:
+            if not isinstance(d, str) or d not in DELIMS:
                 raise ValidationError(f"unsupported delimiter {d!r}")
         return {"type": "paren", "child": child("child"), "left": left, "right": right}
     raise ValidationError(f"unknown node type: {ntype!r}")

@@ -1,9 +1,10 @@
-# 数学公式单行排版后端
+# 数学公式排版与有理式演算核验后端
 
 将结构化公式树排版为单行、自包含的 SVG（仅含字形轮廓路径与横线矩形，
 不依赖字体文件、外链、脚本或 foreignObject）。使用
 fonts/STIXTwoMath-Regular.otf 的真实字形轮廓、前进宽度、斜体修正与
-OpenType MATH 表度量，不做等宽估算。
+OpenType MATH 表度量，不做等宽估算。另提供 POST /check 有理式演算核验，
+供教师核对学生约分、通分等步骤的值与实数定义域。
 
 ## 运行
 
@@ -24,6 +25,70 @@ POST /render
 
 width / height / baseline（基线距 SVG 顶部的距离）与 font_size 同一单位。
 校验失败返回 422 与 {"detail": "..."}，不交付半成品。
+
+POST /check 有理式演算核验：提交 2 至 10 个相邻演算步骤与字号，逐步骤
+返回精确分子/分母多项式、实数定义域禁取点与按原式排版的 SVG 尺寸，并对
+每对相邻步骤给出核验结论。
+
+    {
+      "font_size": 48,
+      "steps": [
+        {"type":"div","left":{"type":"var"},
+         "right":{"type":"sub","left":{"type":"var"},
+                                      "right":{"type":"num","n":1}}},
+        ...
+      ]
+    }
+
+返回:
+
+    {
+      "steps": [{"numerator":"x","denominator":"x - 1",
+                 "forbidden": [{"kind":"rational","value":"1","approx":1.0}],
+                 "svg":"<svg ...>","width":..,
+                 "height":..,
+                 "baseline":..}, ...],
+      "comparisons": [
+        {"verdict":"identical",
+         "identical_on_common_domain": true, "same_domain": true,
+         "added_forbidden": [], "removed_forbidden": [],
+         "cross_product_difference": "0"}, ...]
+    }
+
+verdict 三态：
+
+- identical：公共定义域上有理函数恒等，且禁取点集合完全相同。
+- same_value_domain_changed：公共定义域上恒等（交叉乘积差多项式为 0），
+  但定义域变化；added_forbidden / removed_forbidden 给出新增与解除的点。
+  约分抹掉限制会判为此态（例如 x/x → 1 解除 x=0）。
+- not_identical：不恒等；cross_product_difference 为 N1·D2 − N2·D1 展开的
+  整数系数差多项式，作为不恒等的代数证据（非抽样点判定）。
+
+禁取点：kind=rational 时 value 为整数字符串或 "p/q" 分数；kind=algebraic
+时 poly 为整系数不可约多项式、index 为 SymPy CRootOf 的实根序号、root 为
+其精确实代数根表示，approx 仅供展示排序。根去重基于不可约因子的代数结构
+（因子先在整数上分解后合并重数），不使用浮点容差。
+
+## 有理式表达式树
+
+仅接受以下结构化节点；任何字符串表达式或代码一律拒绝：
+
+- {"type":"num","n":整数,"d":非零整数}  有理常数，d 省略视为 1
+- {"type":"var"}  变量 x
+- {"type":"add"|"sub"|"mul"|"div","left":E,"right":E}
+- {"type":"pow","base":E,"exp":0..6 的整数}
+
+核验规则与限制：
+
+- 全部运算在 SymPy 整数系数多项式上精确进行（ZZ 域），无浮点比较。
+- 每个原始子式除数的零点都登记为禁取值；约分只影响 N/D 展示，不抹掉限制。
+- 嵌套除法保留内层除数限制；0 次幂 base^0 保留 base 自身全部限制
+  （含嵌套除数与 base 分子零点）。恒零除数（含可化简为 0，如 1/(x−x)）
+  直接拒绝。
+- 单树至多 200 个节点、嵌套深 20；每次二元/幂运算后中间分子、分母次数
+  至多 12，越界拒绝。整数字面量至多 100 位。输入树不被修改。
+- 排版按原式结构生成既有节点（分式、乘除、幂与必要括号），不用约分结果
+  替换原式；负常数、连减右操作数、作为幂底的复合式等处自动补括号。
 
 ## 节点格式
 
@@ -62,10 +127,12 @@ viewBox 按全部墨迹与横线的实际包围盒计算，不发生裁切。
 ## 代码结构
 
 - algebra_check223/font.py    字体读取：度量、MATH 常量、轮廓路径、伸展变体与拼装
-- algebra_check223/nodes.py   公式树校验（深度/节点数/字号/字符覆盖限制）
-- algebra_check223/layout.py  递归布局：行、分式、上下标、根号、括号
+- algebra_check223/nodes.py   排版树校验（深度/节点数/字号/字符覆盖限制）
+- algebra_check223/expr.py    有理式树校验、精确有理运算、禁取点实根、逐步比较
+- algebra_check223/typeset.py 有理式树到既有排版节点的转换
+- algebra_check223/layout.py  递归布局：行、分式、上下标、根号、括号（伸展件按墨迹钳制覆盖）
 - algebra_check223/svg.py     SVG 绘制与包围盒/基线计算
-- algebra_check223/app.py     FastAPI HTTP 交付
+- algebra_check223/app.py     FastAPI HTTP 交付（/render 与 /check）
 - algebra_check223/selftest.py 自测
 
 ## 范围与限制
@@ -74,3 +141,5 @@ viewBox 按全部墨迹与横线的实际包围盒计算，不发生裁切。
 - 缺字、未知节点、缺子项、非有限或非正字号、过深（>64 层）或过大
   （>5000 节点）的输入一律拒绝。
 - 排版结果确定：同一输入产生完全相同的 SVG；输入树不被修改。
+- /check 仅处理单变量 x 的有理函数（由上述节点构成）；无理式、多变量、
+  表达式字符串与代码均不支持；2..10 步、节点/深度/次数超限返回 422。
