@@ -175,7 +175,9 @@ class Layout:
         gap = self.const("RadicalVerticalGap", size)
         extra = self.const("RadicalExtraAscender", size)
 
-        target_units = (rad.height + gap + rule_t) / k
+        # The surd must cover the full radicand: height above the baseline
+        # plus depth below it, not just the ascender side.
+        target_units = (rad.height + rad.depth + gap + rule_t) / k
         radical_glyph = self.font.glyph_for("\u221a")
         pieces, covered_units = self.font.stretch_vertical(radical_glyph, target_units)
         covered = covered_units * k
@@ -201,7 +203,10 @@ class Layout:
         inner = self.layout(node["child"], size, level)
         k = size / self.font.upem
         axis = self.const("AxisHeight", size)
-        target_units = (inner.height + inner.depth) / k
+        # Delimiters are centered on the math axis; the half-height must
+        # reach both the ascender and descender extremes of the content.
+        half = max(inner.height - axis, inner.depth + axis)
+        target_units = (2.0 * half) / k
 
         items = []
         x = 0.0
